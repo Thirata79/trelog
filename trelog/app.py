@@ -18,6 +18,7 @@ LINE_REPLY_URL = "https://api.line.me/v2/bot/message/reply"
 SHEET_ID = os.environ.get("GOOGLE_SHEET_ID")
 
 # ---------- セッション一時保存（メモリ内） ----------
+# { userId: { studentName, menu, memo, next } }
 sessions = {}
 
 # ---------- LINE送信ヘルパー ----------
@@ -71,6 +72,7 @@ def webhook():
 
 # ---------- 音声処理 ----------
 def handle_audio(user_id, reply_token, message_id):
+    # LINEから音声ダウンロード
     headers = {"Authorization": f"Bearer {LINE_TOKEN}"}
     res = requests.get(
         f"https://api-data.line.me/v2/bot/message/{message_id}/content",
@@ -81,6 +83,7 @@ def handle_audio(user_id, reply_token, message_id):
         f.write(res.content)
         audio_path = f.name
 
+    # Whisper文字起こし
     with open(audio_path, "rb") as audio_file:
         transcript = openai_client.audio.transcriptions.create(
             model="whisper-1",
@@ -89,6 +92,7 @@ def handle_audio(user_id, reply_token, message_id):
         )
     text = transcript.text
 
+    # GPT解析
     gpt_res = openai_client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[
@@ -111,6 +115,7 @@ def handle_audio(user_id, reply_token, message_id):
     memo = data.get("Memo", "")
     next_session = data.get("Next", "")
 
+    # セッション保存
     sessions[user_id] = {
         "studentName": student,
         "menu": menu,
@@ -118,6 +123,7 @@ def handle_audio(user_id, reply_token, message_id):
         "next": next_session
     }
 
+    # 確認メッセージ送信
     reply_message(reply_token, [
         {
             "type": "text",
@@ -162,6 +168,7 @@ def handle_text(user_id, reply_token, text):
 # ---------- ポストバック処理 ----------
 def handle_postback(user_id, reply_token, data):
 
+    # 記録する
     if data == "action=記録":
         session = sessions.get(user_id)
         if not session:
@@ -170,6 +177,7 @@ def handle_postback(user_id, reply_token, data):
             ])
             return
 
+        # Google Sheetsに書き込み
         try:
             write_to_sheets(session)
         except Exception as e:
@@ -177,6 +185,7 @@ def handle_postback(user_id, reply_token, data):
             print(f"Sheets error: {type(e).__name__}: {e}", flush=True)
             traceback.print_exc()
 
+        # 生徒送信確認
         reply_message(reply_token, [
             {
                 "type": "text",
@@ -204,6 +213,7 @@ def handle_postback(user_id, reply_token, data):
             }
         ])
 
+    # 生徒に送信する
     elif data == "action=送信":
         session = sessions.get(user_id)
         if not session:
@@ -230,18 +240,21 @@ def handle_postback(user_id, reply_token, data):
             reply_message(reply_token, [
                 {"type": "text", "text": f"✅ {student_name}さんに送信しました！"}
             ])
+            # セッションクリア
             sessions.pop(user_id, None)
         else:
             reply_message(reply_token, [
                 {"type": "text", "text": f"⚠️ 「{student_name}」のLINE IDが登録されていません。\nstudents.jsonに追加してください。"}
             ])
 
+    # スキップ
     elif data == "action=スキップ":
         reply_message(reply_token, [
             {"type": "text", "text": "✅ スキップしました。"}
         ])
         sessions.pop(user_id, None)
 
+    # やり直す
     elif data == "action=retry":
         sessions.pop(user_id, None)
         reply_message(reply_token, [
@@ -261,7 +274,7 @@ def write_to_sheets(session):
 
     sheet = client.open_by_key(SHEET_ID).worksheet("セッションログ")
     all_rows = sheet.get_all_values()
-    no = len(all_rows) - 1
+    no = len(all_rows) - 1  # ヘッダー行を除いた行数
 
     sheet.append_row([
         no,
@@ -269,7 +282,7 @@ def write_to_sheets(session):
         session.get("studentName", ""),
         session.get("menu", ""),
         session.get("memo", ""),
-        "",
+        "",  # トレーナー所見（空欄）
         session.get("next", ""),
         "未送信"
     ])
@@ -288,3 +301,4 @@ def get_student_line_id(student_name):
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port)
+    
