@@ -177,12 +177,12 @@ def handle_postback(user_id, reply_token, data):
             ])
             return
 
-        # Google Sheetsに書き込み
-        try:
-            write_to_sheets(session)
-        except Exception as e:
-            print(f"Sheets error: {e}")
-
+try:
+    write_to_sheets(session)
+except Exception as e:
+    import traceback
+    print(f"Sheets error: {type(e).__name__}: {e}", flush=True)
+    traceback.print_exc()
         # 生徒送信確認
         reply_message(reply_token, [
             {
