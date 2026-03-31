@@ -256,12 +256,7 @@ def write_to_sheets(session):
         raise Exception("GOOGLE_CREDENTIALS not set")
 
     creds_data = json.loads(creds_json)
-    scopes = [
-        "https://spreadsheets.google.com/feeds",
-        "https://www.googleapis.com/auth/drive"
-    ]
-    creds = Credentials.from_service_account_info(creds_data, scopes=scopes)
-    client = gspread.authorize(creds)
+client = gspread.service_account_from_dict(creds_data)
 
     sheet = client.open_by_key(SHEET_ID).worksheet("セッションログ")
     all_rows = sheet.get_all_values()
