@@ -255,6 +255,8 @@ def write_to_sheets(session):
         raise Exception("GOOGLE_CREDENTIALS not set")
 
     creds_data = json.loads(creds_json)
+    print(f"[SHEETS] client_email: {creds_data.get('client_email')}", flush=True)
+    print(f"[SHEETS] SHEET_ID: {SHEET_ID}", flush=True)
     client = gspread.service_account_from_dict(creds_data)
 
     sheet = client.open_by_key(SHEET_ID).worksheet("セッションログ")
