@@ -46,17 +46,27 @@ def webhook():
         user_id = event.get("source", {}).get("userId", "")
         reply_token = event.get("replyToken", "")
 
-        if event_type == "message":
-            msg = event.get("message", {})
-            msg_type = msg.get("type")
-            if msg_type == "audio":
-                handle_audio(user_id, reply_token, msg.get("id"))
-            elif msg_type == "text":
-                handle_text(user_id, reply_token, msg.get("text", ""))
+        print(f"[EVENT] type={event_type} user={user_id}", flush=True)
 
-        elif event_type == "postback":
-            data = event.get("postback", {}).get("data", "")
-            handle_postback(user_id, reply_token, data)
+        try:
+            if event_type == "message":
+                msg = event.get("message", {})
+                msg_type = msg.get("type")
+                print(f"[MESSAGE] type={msg_type}", flush=True)
+                if msg_type == "audio":
+                    handle_audio(user_id, reply_token, msg.get("id"))
+                elif msg_type == "text":
+                    handle_text(user_id, reply_token, msg.get("text", ""))
+
+            elif event_type == "postback":
+                data = event.get("postback", {}).get("data", "")
+                print(f"[POSTBACK] data={data}", flush=True)
+                handle_postback(user_id, reply_token, data)
+
+        except Exception as e:
+            print(f"[ERROR] {e}", flush=True)
+            import traceback
+            traceback.print_exc()
 
     return jsonify({"status": "ok"})
 
@@ -256,7 +266,7 @@ def write_to_sheets(session):
         raise Exception("GOOGLE_CREDENTIALS not set")
 
     creds_data = json.loads(creds_json)
-client = gspread.service_account_from_dict(creds_data)
+    client = gspread.service_account_from_dict(creds_data)
 
     sheet = client.open_by_key(SHEET_ID).worksheet("セッションログ")
     all_rows = sheet.get_all_values()
