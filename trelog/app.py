@@ -64,6 +64,9 @@ def handle_audio(user_id, reply_token, message_id):
     with open(audio_path, "rb") as audio_file:
         transcript = openai_client.audio.transcriptions.create(model="whisper-1", file=audio_file, language="ja")
     text = transcript.text
+    parse_and_confirm(user_id, reply_token, text)
+
+def parse_and_confirm(user_id, reply_token, text):
     gpt_res = openai_client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[
@@ -82,13 +85,15 @@ def handle_audio(user_id, reply_token, message_id):
 
 def handle_text(user_id, reply_token, text):
     if text.strip() in ["/記録", "記録"]:
-        reply_message(reply_token, [{"type": "text", "text": "話してください 🎤"}])
+        reply_message(reply_token, [{"type": "text", "text": "音声またはテキストで稽古内容を送ってください 🎤✏️"}])
+    elif len(text.strip()) > 5:
+        parse_and_confirm(user_id, reply_token, text)
 
 def handle_postback(user_id, reply_token, data):
     if data == "action=記録":
         session = sessions.get(user_id)
         if not session:
-            reply_message(reply_token, [{"type": "text", "text": "⚠️ セッションデータが見つかりません。もう一度音声を送ってください。"}])
+            reply_message(reply_token, [{"type": "text", "text": "⚠️ セッションデータが見つかりません。もう一度送ってください。"}])
             return
         try:
             write_to_sheets(session)
@@ -115,13 +120,12 @@ def handle_postback(user_id, reply_token, data):
         sessions.pop(user_id, None)
     elif data == "action=retry":
         sessions.pop(user_id, None)
-        reply_message(reply_token, [{"type": "text", "text": "もう一度音声を送ってください 🎤"}])
+        reply_message(reply_token, [{"type": "text", "text": "もう一度送ってください 🎤✏️"}])
 
 def write_to_sheets(session):
     creds_json = os.environ.get("GOOGLE_CREDENTIALS", "")
     if not creds_json:
         raise Exception("GOOGLE_CREDENTIALS not set")
-
     try:
         creds_data = json.loads(creds_json)
     except json.JSONDecodeError:
@@ -132,10 +136,8 @@ def write_to_sheets(session):
             flags=re.DOTALL
         )
         creds_data = json.loads(fixed)
-
     if "private_key" in creds_data:
         creds_data["private_key"] = creds_data["private_key"].replace("\\n", "\n")
-
     print(f"[SHEETS] client_email: {creds_data.get('client_email')}", flush=True)
     print(f"[SHEETS] SHEET_ID: {SHEET_ID}", flush=True)
     client = gspread.service_account_from_dict(creds_data)
