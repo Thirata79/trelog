@@ -48,18 +48,24 @@ def get_sheets_client():
     return gspread.service_account_from_dict(creds_data)
 
 # ========== 生徒マスターからLINE ID取得 ==========
+def normalize_name(name):
+    """名前の表記揺れを吸収（スペース全角半角除去）"""
+    return name.replace(" ", "").replace("\u3000", "").strip()
+
 def get_student_line_id(student_name):
     """生徒マスターシートから生徒名でLINE IDを検索
     シート構造: A=ID, B=生徒名, C=保護者名, D=保護者LINE UserID
+    スペースの有無・全角半角を無視してマッチング
     """
     try:
         client = get_sheets_client()
         sheet = client.open_by_key(SHEET_ID).worksheet("生徒マスター")
         rows = sheet.get_all_values()
+        target = normalize_name(student_name)
         for row in rows[1:]:
             name = row[1] if len(row) > 1 else ""       # B列: 生徒名
             line_id = row[3] if len(row) > 3 else ""     # D列: 保護者LINE UserID
-            if name == student_name and line_id:
+            if normalize_name(name) == target and line_id:
                 return line_id
         return None
     except Exception as e:
