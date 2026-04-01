@@ -19,6 +19,8 @@ SHEET_ID = os.environ.get("GOOGLE_SHEET_ID")
 
 # ---------- セッション一時保存（メモリ内） ----------
 sessions = {}
+# 記録待ちの生徒名 { userId: studentName }
+recording_for = {}
 
 # ========== LINE送信ヘルパー ==========
 def push_message(to, messages):
@@ -208,17 +210,18 @@ def handle_audio(user_id, reply_token, message_id):
             model="whisper-1", file=audio_file, language="ja",
             prompt=whisper_prompt
         )
-    parse_and_confirm(user_id, reply_token, transcript.text)
+    # 事前に生徒が選択されていればその名前を渡す
+    selected_student = recording_for.get(user_id, "")
+    parse_and_confirm(user_id, reply_token, transcript.text, selected_student)
 
 # ========== GPT解析＋確認（音声・テキスト共通） ==========
-def parse_and_confirm(user_id, reply_token, text):
-    # エクササイズリストをGPTに渡して正確なメニュー名を使わせる
+def parse_and_confirm(user_id, reply_token, text, selected_student=""):
+    # 用語リスト（スペル補正用のみ。GPTの解析内容には影響させない）
     exercise_hint = ""
     try:
         terms_ja, terms_en = get_vocabulary()
-        all_terms = terms_ja + terms_en
-        if all_terms:
-            exercise_hint = f"\n\nReference exercise/term list (use these exact names when matching): {', '.join(all_terms[:150])}"
+        if terms_ja:
+            exercise_hint = f"\n\nSpelling reference only (do NOT add exercises not mentioned by the trainer): {', '.join(terms_ja[:80])}"
     except Exception as e:
         print(f"[用語読込スキップ] {e}", flush=True)
 
@@ -231,8 +234,12 @@ def parse_and_confirm(user_id, reply_token, text):
                     "You are a helpful assistant that extracts session notes from a Japanese fitness/martial arts trainer. "
                     "Always respond with valid JSON only, no markdown, no explanation. "
                     'Format: {"Student name":"name","Menu":"what was done","Memo":"observations","Next":"next steps"}'
-                    "\n\nFor Menu field: use the exact exercise names from the reference list when there is a match. "
-                    "Keep the original language (Japanese or English) as spoken by the trainer."
+                    "\n\nIMPORTANT RULES:"
+                    "\n- Only extract what the trainer ACTUALLY said. Do NOT invent or add content."
+                    "\n- Menu: list ONLY exercises explicitly mentioned. Do NOT guess or add extras."
+                    "\n- Memo: summarize ONLY what the trainer observed. Do NOT embellish."
+                    "\n- Next: state ONLY what the trainer said about next steps. If not mentioned, leave empty."
+                    "\n- The spelling reference below is ONLY for correcting misspellings (e.g. 内線→内旋). Do NOT use it to add exercises."
                     + exercise_hint
                 )
             },
@@ -241,12 +248,15 @@ def parse_and_confirm(user_id, reply_token, text):
         response_format={"type": "json_object"}
     )
     data = json.loads(gpt_res.choices[0].message.content)
-    student = data.get("Student name", "")
+    # 事前に生徒が選択されていればそちらを優先
+    student = selected_student if selected_student else data.get("Student name", "")
     menu = data.get("Menu", "")
     memo = data.get("Memo", "")
     next_session = data.get("Next", "")
 
     sessions[user_id] = {"studentName": student, "menu": menu, "memo": memo, "next": next_session}
+    # 記録待ち状態をクリア
+    recording_for.pop(user_id, None)
 
     reply_message(reply_token, [{
         "type": "text",
@@ -268,9 +278,9 @@ def parse_and_confirm(user_id, reply_token, text):
 def handle_text(user_id, reply_token, text):
     cmd = text.strip()
 
-    # /記録
+    # /記録 → 生徒選択画面
     if cmd in ["/記録", "記録"]:
-        reply_message(reply_token, [{"type": "text", "text": "音声またはテキストで稽古内容を送ってください"}])
+        handle_record_select(user_id, reply_token)
 
     # /送信 → 未送信レコード一覧を表示
     elif cmd in ["/送信", "送信"]:
@@ -285,7 +295,40 @@ def handle_text(user_id, reply_token, text):
         handle_report(reply_token)
 
     elif len(cmd) > 5:
-        parse_and_confirm(user_id, reply_token, text)
+        # 記録待ちの生徒がいればその生徒名付きで解析
+        selected_student = recording_for.get(user_id, "")
+        parse_and_confirm(user_id, reply_token, text, selected_student)
+
+# ========== /記録: 生徒選択画面 ==========
+def handle_record_select(user_id, reply_token):
+    try:
+        client = get_sheets_client()
+        sheet = client.open_by_key(SHEET_ID).worksheet("生徒マスター")
+        rows = sheet.get_all_values()
+        items = []
+        for row in rows[2:]:
+            name = row[1] if len(row) > 1 else ""
+            if name:
+                label = name[:20]
+                items.append({
+                    "type": "action",
+                    "action": {
+                        "type": "postback",
+                        "label": label,
+                        "data": f"action=record_for&student={name}"
+                    }
+                })
+        if items:
+            reply_message(reply_token, [{
+                "type": "text",
+                "text": "誰の記録ですか？",
+                "quickReply": {"items": items[:13]}
+            }])
+        else:
+            reply_message(reply_token, [{"type": "text", "text": "生徒マスターにデータがありません。"}])
+    except Exception as e:
+        print(f"[記録選択エラー] {e}", flush=True)
+        reply_message(reply_token, [{"type": "text", "text": "データ取得中にエラーが発生しました。"}])
 
 # ========== /送信: 未送信レコード一覧 ==========
 def handle_send_list(user_id, reply_token):
