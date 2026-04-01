@@ -62,7 +62,8 @@ def get_student_line_id(student_name):
         sheet = client.open_by_key(SHEET_ID).worksheet("生徒マスター")
         rows = sheet.get_all_values()
         target = normalize_name(student_name)
-        for row in rows[1:]:
+        # rows[0]=タイトル行, rows[1]=ヘッダー行, rows[2:]以降=データ
+        for row in rows[2:]:
             name = row[1] if len(row) > 1 else ""       # B列: 生徒名
             line_id = row[3] if len(row) > 3 else ""     # D列: 保護者LINE UserID
             if normalize_name(name) == target and line_id:
@@ -230,7 +231,8 @@ def handle_prep_select(reply_token):
         sheet = client.open_by_key(SHEET_ID).worksheet("生徒マスター")
         rows = sheet.get_all_values()
         items = []
-        for row in rows[1:]:
+        # rows[0]=タイトル行, rows[1]=ヘッダー行, rows[2:]以降=データ
+        for row in rows[2:]:
             name = row[1] if len(row) > 1 else ""
             if name:
                 label = name[:20]
@@ -257,18 +259,21 @@ def handle_prep_select(reply_token):
 # ========== /準備: 直近2セッション要約＋サジェスト ==========
 def handle_next_prep(reply_token, student_name):
     try:
+        print(f"[準備] 生徒={student_name}", flush=True)
         client = get_sheets_client()
         sheet = client.open_by_key(SHEET_ID).worksheet("セッションログ")
         all_rows = sheet.get_all_values()
 
         # その生徒の記録を抽出（名前の表記揺れ対応）
         target = normalize_name(student_name)
+        print(f"[準備] 検索ターゲット={target} 全行数={len(all_rows)}", flush=True)
         student_rows = []
         for row in all_rows[1:]:
             name = row[2] if len(row) > 2 else ""
             if normalize_name(name) == target:
                 student_rows.append(row)
 
+        print(f"[準備] {student_name}の記録数={len(student_rows)}", flush=True)
         if not student_rows:
             reply_message(reply_token, [{"type": "text", "text": f"{student_name}さんの記録がまだありません。"}])
             return
@@ -288,7 +293,7 @@ def handle_next_prep(reply_token, student_name):
         master_sheet = client.open_by_key(SHEET_ID).worksheet("生徒マスター")
         master_rows = master_sheet.get_all_values()
         student_info = ""
-        for row in master_rows[1:]:
+        for row in master_rows[2:]:
             name = row[1] if len(row) > 1 else ""
             if normalize_name(name) == target:
                 age = row[5] if len(row) > 5 else ""
@@ -440,6 +445,14 @@ def handle_postback(user_id, reply_token, data):
             import traceback
             traceback.print_exc()
             reply_message(reply_token, [{"type": "text", "text": "送信中にエラーが発生しました。"}])
+
+    # ---------- 次回準備（生徒選択後） ----------
+    elif action == "prep":
+        student_name = params.get("student", "")
+        if student_name:
+            handle_next_prep(reply_token, student_name)
+        else:
+            reply_message(reply_token, [{"type": "text", "text": "生徒名が取得できませんでした。"}])
 
     # ---------- スキップ ----------
     elif action == "スキップ":
