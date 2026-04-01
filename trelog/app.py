@@ -49,15 +49,16 @@ def get_sheets_client():
 
 # ========== 生徒マスターからLINE ID取得 ==========
 def get_student_line_id(student_name):
-    """生徒マスターシートから生徒名でLINE IDを検索"""
+    """生徒マスターシートから生徒名でLINE IDを検索
+    シート構造: A=ID, B=生徒名, C=保護者名, D=保護者LINE UserID
+    """
     try:
         client = get_sheets_client()
         sheet = client.open_by_key(SHEET_ID).worksheet("生徒マスター")
         rows = sheet.get_all_values()
-        # ヘッダー: 生徒名 / LINE ID / ...
         for row in rows[1:]:
-            name = row[0] if len(row) > 0 else ""
-            line_id = row[1] if len(row) > 1 else ""
+            name = row[1] if len(row) > 1 else ""       # B列: 生徒名
+            line_id = row[3] if len(row) > 3 else ""     # D列: 保護者LINE UserID
             if name == student_name and line_id:
                 return line_id
         return None
