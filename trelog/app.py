@@ -182,6 +182,10 @@ def webhook():
             print(f"[ERROR] {e}", flush=True)
             import traceback
             traceback.print_exc()
+            try:
+                reply_message(reply_token, [{"type": "text", "text": "処理中にエラーが発生しました。もう一度お試しください。"}])
+            except Exception:
+                pass
     return jsonify({"status": "ok"})
 
 # ========== 音声処理 ==========
@@ -192,8 +196,12 @@ def handle_audio(user_id, reply_token, message_id):
         f.write(res.content)
         audio_path = f.name
     # 日本語用語をWhisperのpromptに渡して認識精度UP
-    terms_ja, _ = get_vocabulary()
-    whisper_prompt = "空手道場の稽古記録。" + "、".join(terms_ja[:100]) if terms_ja else ""
+    try:
+        terms_ja, _ = get_vocabulary()
+        whisper_prompt = "空手道場の稽古記録。" + "、".join(terms_ja[:100]) if terms_ja else ""
+    except Exception as e:
+        print(f"[用語読込スキップ] {e}", flush=True)
+        whisper_prompt = ""
 
     with open(audio_path, "rb") as audio_file:
         transcript = openai_client.audio.transcriptions.create(
@@ -205,11 +213,14 @@ def handle_audio(user_id, reply_token, message_id):
 # ========== GPT解析＋確認（音声・テキスト共通） ==========
 def parse_and_confirm(user_id, reply_token, text):
     # エクササイズリストをGPTに渡して正確なメニュー名を使わせる
-    terms_ja, terms_en = get_vocabulary()
     exercise_hint = ""
-    all_terms = terms_ja + terms_en
-    if all_terms:
-        exercise_hint = f"\n\nReference exercise/term list (use these exact names when matching): {', '.join(all_terms[:150])}"
+    try:
+        terms_ja, terms_en = get_vocabulary()
+        all_terms = terms_ja + terms_en
+        if all_terms:
+            exercise_hint = f"\n\nReference exercise/term list (use these exact names when matching): {', '.join(all_terms[:150])}"
+    except Exception as e:
+        print(f"[用語読込スキップ] {e}", flush=True)
 
     gpt_res = openai_client.chat.completions.create(
         model="gpt-4o-mini",
