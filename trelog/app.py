@@ -518,6 +518,13 @@ def handle_postback(user_id, reply_token, data):
     params = dict(p.split("=", 1) for p in data.split("&") if "=" in p)
     action = params.get("action", "")
 
+    # ---------- 記録対象の生徒を選択 ----------
+    if action == "record_for":
+        student_name = params.get("student", "")
+        recording_for[user_id] = student_name
+        reply_message(reply_token, [{"type": "text", "text": f"{student_name}さんですね。\n稽古内容を音声またはテキストで教えてください。"}])
+        return
+
     # ---------- 記録する ----------
     if action == "記録":
         session = sessions.get(user_id)
