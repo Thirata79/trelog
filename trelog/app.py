@@ -165,9 +165,9 @@ def handle_text(user_id, reply_token, text):
     elif cmd in ["/送信", "送信"]:
         handle_send_list(user_id, reply_token)
 
-    # /準備 → 次回への申し送り
+    # /準備 → 生徒選択 → 直近2セッション要約＋サジェスト
     elif cmd in ["/準備", "準備"]:
-        handle_next_prep(reply_token)
+        handle_prep_select(reply_token)
 
     # /レポート → 直近サマリー
     elif cmd in ["/レポート", "レポート"]:
@@ -223,26 +223,110 @@ def handle_send_list(user_id, reply_token):
         traceback.print_exc()
         reply_message(reply_token, [{"type": "text", "text": "データ取得中にエラーが発生しました。"}])
 
-# ========== /準備: 次回への申し送り ==========
-def handle_next_prep(reply_token):
+# ========== /準備: 生徒選択画面 ==========
+def handle_prep_select(reply_token):
+    try:
+        client = get_sheets_client()
+        sheet = client.open_by_key(SHEET_ID).worksheet("生徒マスター")
+        rows = sheet.get_all_values()
+        items = []
+        for row in rows[1:]:
+            name = row[1] if len(row) > 1 else ""
+            if name:
+                label = name[:20]
+                items.append({
+                    "type": "action",
+                    "action": {
+                        "type": "postback",
+                        "label": label,
+                        "data": f"action=prep&student={name}"
+                    }
+                })
+        if items:
+            reply_message(reply_token, [{
+                "type": "text",
+                "text": "次回準備をする生徒を選んでください。",
+                "quickReply": {"items": items[:13]}
+            }])
+        else:
+            reply_message(reply_token, [{"type": "text", "text": "生徒マスターにデータがありません。"}])
+    except Exception as e:
+        print(f"[準備選択エラー] {e}", flush=True)
+        reply_message(reply_token, [{"type": "text", "text": "データ取得中にエラーが発生しました。"}])
+
+# ========== /準備: 直近2セッション要約＋サジェスト ==========
+def handle_next_prep(reply_token, student_name):
     try:
         client = get_sheets_client()
         sheet = client.open_by_key(SHEET_ID).worksheet("セッションログ")
         all_rows = sheet.get_all_values()
-        recent = all_rows[-5:] if len(all_rows) > 5 else all_rows[1:]
-        lines = []
-        for row in reversed(recent):
+
+        # その生徒の記録を抽出（名前の表記揺れ対応）
+        target = normalize_name(student_name)
+        student_rows = []
+        for row in all_rows[1:]:
             name = row[2] if len(row) > 2 else ""
+            if normalize_name(name) == target:
+                student_rows.append(row)
+
+        if not student_rows:
+            reply_message(reply_token, [{"type": "text", "text": f"{student_name}さんの記録がまだありません。"}])
+            return
+
+        # 直近2件を取得
+        recent = student_rows[-2:]
+        session_text = ""
+        for row in recent:
             date = row[1] if len(row) > 1 else ""
+            menu = row[3] if len(row) > 3 else ""
+            memo = row[4] if len(row) > 4 else ""
+            trainer = row[5] if len(row) > 5 else ""
             next_note = row[6] if len(row) > 6 else ""
-            if next_note:
-                lines.append(f"{name}（{date}）\n→ {next_note}")
-        if lines:
-            reply_message(reply_token, [{"type": "text", "text": "【次回への申し送り】\n\n" + "\n\n".join(lines)}])
-        else:
-            reply_message(reply_token, [{"type": "text", "text": "申し送りデータがありません。"}])
+            session_text += f"日付:{date} メニュー:{menu} メモ:{memo} 所見:{trainer} 申し送り:{next_note}\n"
+
+        # 生徒マスターの情報も取得
+        master_sheet = client.open_by_key(SHEET_ID).worksheet("生徒マスター")
+        master_rows = master_sheet.get_all_values()
+        student_info = ""
+        for row in master_rows[1:]:
+            name = row[1] if len(row) > 1 else ""
+            if normalize_name(name) == target:
+                age = row[5] if len(row) > 5 else ""
+                goal = row[6] if len(row) > 6 else ""
+                caution = row[7] if len(row) > 7 else ""
+                level = row[8] if len(row) > 8 else ""
+                student_info = f"年齢:{age} 目標:{goal} 注意事項:{caution} レベル:{level}"
+                break
+
+        # GPTで要約＋サジェスト
+        prompt = (
+            f"以下は空手道場の生徒「{student_name}」の情報と直近セッション記録です。\n\n"
+            f"【生徒情報】{student_info}\n\n"
+            f"【直近セッション】\n{session_text}\n"
+            f"上記を踏まえて、以下を簡潔に日本語で答えてください：\n"
+            f"1. 直近2回の稽古の要約（3行以内）\n"
+            f"2. 成長ポイント\n"
+            f"3. 次回セッションで取り組むべきこと（具体的な提案）"
+        )
+
+        gpt_res = openai_client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": "あなたは空手道場のトレーナーアシスタントです。簡潔で実用的なアドバイスをしてください。"},
+                {"role": "user", "content": prompt}
+            ]
+        )
+        summary = gpt_res.choices[0].message.content
+
+        reply_message(reply_token, [{
+            "type": "text",
+            "text": f"【{student_name}さん 次回準備】\n\n{summary}"
+        }])
+
     except Exception as e:
         print(f"[準備エラー] {e}", flush=True)
+        import traceback
+        traceback.print_exc()
         reply_message(reply_token, [{"type": "text", "text": "データ取得中にエラーが発生しました。"}])
 
 # ========== /レポート: 直近サマリー ==========
