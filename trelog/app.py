@@ -47,6 +47,88 @@ def get_sheets_client():
         creds_data["private_key"] = creds_data["private_key"].replace("\\n", "\n")
     return gspread.service_account_from_dict(creds_data)
 
+# ========== 用語・エクササイズ辞書の読み込み ==========
+_vocab_cache = {"terms_ja": None, "terms_en": None, "updated": None}
+
+def translate_exercises_to_ja(english_terms):
+    """英語エクササイズ名をGPTで日本語カタカナに一括翻訳"""
+    if not english_terms:
+        return []
+    try:
+        chunk = english_terms[:100]  # コスト抑制のため100件まで
+        res = openai_client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": (
+                    "Translate these English exercise names to Japanese katakana. "
+                    "Return ONLY a JSON array of translated names in the same order. "
+                    "Example: [\"スプリットスクワット\", \"デッドリフト\"]"
+                )},
+                {"role": "user", "content": json.dumps(chunk)}
+            ],
+            response_format={"type": "json_object"}
+        )
+        data = json.loads(res.choices[0].message.content)
+        # JSONオブジェクトの場合はvaluesを取得
+        if isinstance(data, dict):
+            return list(data.values())[0] if data else []
+        return data if isinstance(data, list) else []
+    except Exception as e:
+        print(f"[翻訳エラー] {e}", flush=True)
+        return []
+
+def get_vocabulary():
+    """用語リスト＋エクササイズライブラリからWhisper/GPT用の用語を取得（10分キャッシュ）"""
+    now = datetime.now()
+    if _vocab_cache["terms_ja"] and _vocab_cache["updated"] and (now - _vocab_cache["updated"]).seconds < 600:
+        return _vocab_cache["terms_ja"], _vocab_cache["terms_en"]
+
+    terms_ja = []  # 日本語用語（Whisper prompt用）
+    terms_en = []  # 英語用語（GPT解析用）
+    try:
+        client = get_sheets_client()
+        wb = client.open_by_key(SHEET_ID)
+
+        # 用語リスト（日本語専門用語）
+        try:
+            vocab_sheet = wb.worksheet("用語リスト")
+            vocab_rows = vocab_sheet.get_all_values()
+            for row in vocab_rows[1:]:
+                term = row[1] if len(row) > 1 else ""
+                if term:
+                    terms_ja.append(term)
+        except Exception as e:
+            print(f"[用語リスト読込] {e}", flush=True)
+
+        # エクササイズライブラリ（英語エクササイズ名）
+        en_exercises = []
+        try:
+            ex_sheet = wb.worksheet("エクササイズライブラリ")
+            ex_rows = ex_sheet.get_all_values()
+            for row in ex_rows[2:]:
+                for cell in row:
+                    if cell and cell.strip():
+                        en_exercises.append(cell.strip())
+        except Exception as e:
+            print(f"[エクササイズライブラリ読込] {e}", flush=True)
+
+        terms_en = en_exercises
+
+        # 英語→日本語カタカナ翻訳
+        if en_exercises:
+            ja_translations = translate_exercises_to_ja(en_exercises)
+            terms_ja.extend(ja_translations)
+            print(f"[翻訳] {len(ja_translations)}件 カタカナ変換", flush=True)
+
+        _vocab_cache["terms_ja"] = terms_ja
+        _vocab_cache["terms_en"] = terms_en
+        _vocab_cache["updated"] = now
+        print(f"[用語] 日本語{len(terms_ja)}件 / 英語{len(terms_en)}件", flush=True)
+    except Exception as e:
+        print(f"[用語読込エラー] {e}", flush=True)
+
+    return terms_ja or [], terms_en or []
+
 # ========== 生徒マスターからLINE ID取得 ==========
 def normalize_name(name):
     """名前の表記揺れを吸収（スペース全角半角除去）"""
@@ -109,12 +191,26 @@ def handle_audio(user_id, reply_token, message_id):
     with tempfile.NamedTemporaryFile(suffix=".m4a", delete=False) as f:
         f.write(res.content)
         audio_path = f.name
+    # 日本語用語をWhisperのpromptに渡して認識精度UP
+    terms_ja, _ = get_vocabulary()
+    whisper_prompt = "空手道場の稽古記録。" + "、".join(terms_ja[:100]) if terms_ja else ""
+
     with open(audio_path, "rb") as audio_file:
-        transcript = openai_client.audio.transcriptions.create(model="whisper-1", file=audio_file, language="ja")
+        transcript = openai_client.audio.transcriptions.create(
+            model="whisper-1", file=audio_file, language="ja",
+            prompt=whisper_prompt
+        )
     parse_and_confirm(user_id, reply_token, transcript.text)
 
 # ========== GPT解析＋確認（音声・テキスト共通） ==========
 def parse_and_confirm(user_id, reply_token, text):
+    # エクササイズリストをGPTに渡して正確なメニュー名を使わせる
+    terms_ja, terms_en = get_vocabulary()
+    exercise_hint = ""
+    all_terms = terms_ja + terms_en
+    if all_terms:
+        exercise_hint = f"\n\nReference exercise/term list (use these exact names when matching): {', '.join(all_terms[:150])}"
+
     gpt_res = openai_client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[
@@ -124,6 +220,9 @@ def parse_and_confirm(user_id, reply_token, text):
                     "You are a helpful assistant that extracts session notes from a Japanese fitness/martial arts trainer. "
                     "Always respond with valid JSON only, no markdown, no explanation. "
                     'Format: {"Student name":"name","Menu":"what was done","Memo":"observations","Next":"next steps"}'
+                    "\n\nFor Menu field: use the exact exercise names from the reference list when there is a match. "
+                    "Keep the original language (Japanese or English) as spoken by the trainer."
+                    + exercise_hint
                 )
             },
             {"role": "user", "content": text}
