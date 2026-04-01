@@ -50,43 +50,49 @@ def get_sheets_client():
     return gspread.service_account_from_dict(creds_data)
 
 # ========== 用語・エクササイズ辞書の読み込み ==========
+# ---------- エクササイズ英日マッピング（軽量・即時） ----------
+EN_TO_JA = {
+    "Split squat": "スプリットスクワット", "Goblet squat": "ゴブレットスクワット",
+    "Plate Squat": "プレートスクワット", "Back Squat": "バックスクワット",
+    "Box Squat": "ボックススクワット", "Bulgarian Split Squat": "ブルガリアンスプリットスクワット",
+    "Crossover Squat": "クロスオーバースクワット", "Cursty Squat": "カーツィースクワット",
+    "Deadlift": "デッドリフト", "Trap Bar Deadlift": "トラップバーデッドリフト",
+    "Single Leg RDL": "シングルレッグRDL", "RDL": "RDL", "Kettle Bell RDL": "ケトルベルRDL",
+    "K-Bell Swing": "ケトルベルスウィング",
+    "BB Glute Bridge": "BBグルートブリッジ", "Glute Bridge": "グルートブリッジ",
+    "Hip Abduction": "ヒップアブダクション", "Machine Adduction": "マシンアダクション",
+    "Laying Curls": "レイイングカール", "Seated Curls": "シーテッドカール",
+    "Jefferson Squat": "ジェファーソンスクワット", "Nordic Curl": "ノルディックカール",
+    "Glute Ham Raise": "グルートハムレイズ", "Bench Press": "ベンチプレス",
+    "DB Bench Press": "ダンベルベンチプレス", "Incline Bench": "インクラインベンチ",
+    "Machine Chest Press": "マシンチェストプレス", "Pushups": "プッシュアップ",
+    "Decline Bench": "デクラインベンチ", "Chest Flies": "チェストフライ",
+    "Incline Pushups": "インクラインプッシュアップ", "DB Flye": "ダンベルフライ",
+    "BB Shoulder Press": "BBショルダープレス", "DB Shoulder Press": "DBショルダープレス",
+    "Front Raises": "フロントレイズ", "Side Raises": "サイドレイズ",
+    "Upright Rows": "アップライトロウ", "Rear Delt Flyes": "リアデルトフライ",
+    "Arnold Press": "アーノルドプレス", "BB Curl": "BBカール",
+    "Hammer Curl": "ハンマーカール", "EZ Bar Curl": "EZバーカール",
+    "Preacher Curl": "プリーチャーカール", "Lat Pulldowns": "ラットプルダウン",
+    "DB Rows": "ダンベルロウ", "BB Rows": "バーベルロウ",
+    "Chest Supported Rows": "チェストサポーテッドロウ", "Chain Pullups": "チンアップ",
+    "TRX Row": "TRXロウ", "High Row": "ハイロウ",
+    "Band pull-apart": "バンドプルアパート",
+    "Side Plank": "サイドプランク", "Plank": "プランク",
+    "Leg Press": "レッグプレス", "Leg Curl": "レッグカール",
+    "Leg Extension": "レッグエクステンション", "Calf Raise": "カーフレイズ",
+}
+
 _vocab_cache = {"terms_ja": None, "terms_en": None, "updated": None}
 
-def translate_exercises_to_ja(english_terms):
-    """英語エクササイズ名をGPTで日本語カタカナに一括翻訳"""
-    if not english_terms:
-        return []
-    try:
-        chunk = english_terms[:100]  # コスト抑制のため100件まで
-        res = openai_client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": (
-                    "Translate these English exercise names to Japanese katakana. "
-                    "Return ONLY a JSON array of translated names in the same order. "
-                    "Example: [\"スプリットスクワット\", \"デッドリフト\"]"
-                )},
-                {"role": "user", "content": json.dumps(chunk)}
-            ],
-            response_format={"type": "json_object"}
-        )
-        data = json.loads(res.choices[0].message.content)
-        # JSONオブジェクトの場合はvaluesを取得
-        if isinstance(data, dict):
-            return list(data.values())[0] if data else []
-        return data if isinstance(data, list) else []
-    except Exception as e:
-        print(f"[翻訳エラー] {e}", flush=True)
-        return []
-
 def get_vocabulary():
-    """用語リスト＋エクササイズライブラリからWhisper/GPT用の用語を取得（10分キャッシュ）"""
+    """用語リスト＋エクササイズライブラリから用語を取得（10分キャッシュ）"""
     now = datetime.now()
     if _vocab_cache["terms_ja"] and _vocab_cache["updated"] and (now - _vocab_cache["updated"]).seconds < 600:
         return _vocab_cache["terms_ja"], _vocab_cache["terms_en"]
 
-    terms_ja = []  # 日本語用語（Whisper prompt用）
-    terms_en = []  # 英語用語（GPT解析用）
+    terms_ja = []
+    terms_en = []
     try:
         client = get_sheets_client()
         wb = client.open_by_key(SHEET_ID)
@@ -103,24 +109,21 @@ def get_vocabulary():
             print(f"[用語リスト読込] {e}", flush=True)
 
         # エクササイズライブラリ（英語エクササイズ名）
-        en_exercises = []
         try:
             ex_sheet = wb.worksheet("エクササイズライブラリ")
             ex_rows = ex_sheet.get_all_values()
             for row in ex_rows[2:]:
                 for cell in row:
                     if cell and cell.strip():
-                        en_exercises.append(cell.strip())
+                        terms_en.append(cell.strip())
         except Exception as e:
             print(f"[エクササイズライブラリ読込] {e}", flush=True)
 
-        terms_en = en_exercises
-
-        # 英語→日本語カタカナ翻訳
-        if en_exercises:
-            ja_translations = translate_exercises_to_ja(en_exercises)
-            terms_ja.extend(ja_translations)
-            print(f"[翻訳] {len(ja_translations)}件 カタカナ変換", flush=True)
+        # 英日マッピングでカタカナ変換（GPT不要・即時）
+        for en in terms_en:
+            ja = EN_TO_JA.get(en)
+            if ja:
+                terms_ja.append(ja)
 
         _vocab_cache["terms_ja"] = terms_ja
         _vocab_cache["terms_en"] = terms_en
