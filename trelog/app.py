@@ -240,6 +240,7 @@ def parse_and_confirm(user_id, reply_token, text, selected_student=""):
                     "\n- Memo: summarize ONLY what the trainer observed. Do NOT embellish."
                     "\n- Next: state ONLY what the trainer said about next steps. If not mentioned, leave empty."
                     "\n- The spelling reference below is ONLY for correcting misspellings (e.g. 内線→内旋). Do NOT use it to add exercises."
+                    "\n- Fix common voice input errors: サンセット→3セット, ゴセット→5セット, 中回→10回, etc. Interpret in fitness context."
                     + exercise_hint
                 )
             },
